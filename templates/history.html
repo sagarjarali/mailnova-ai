@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MailNova - Sent Emails</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 40px;
+            background: #0f172a;
+            font-family: "Segoe UI", Arial, sans-serif;
+            color: #e5e7eb;
+        }
+
+        .wrapper {
+            max-width: 1100px;
+            margin: auto;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 26px;
+            font-weight: 600;
+        }
+
+        .back-link {
+            text-decoration: none;
+            color: #3b82f6;
+            font-size: 14px;
+        }
+
+        .card {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+
+        thead {
+            background: #111827;
+        }
+
+        th {
+            text-align: left;
+            padding: 14px;
+            font-weight: 600;
+            color: #9ca3af;
+            border-bottom: 1px solid #334155;
+        }
+
+        td {
+            padding: 14px;
+            border-bottom: 1px solid #334155;
+            vertical-align: top;
+        }
+
+        tr:hover {
+            background: #273449;
+        }
+
+        .subject {
+            font-weight: 500;
+            color: #ffffff;
+        }
+
+        .receiver {
+            color: #cbd5e1;
+        }
+
+        .timestamp {
+            font-size: 12px;
+            color: #9ca3af;
+        }
+
+        .body-preview {
+            max-width: 350px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: #94a3b8;
+            cursor: pointer;
+        }
+
+        .expandable {
+            display: none;
+            margin-top: 8px;
+            white-space: normal;
+            color: #cbd5e1;
+            font-size: 13px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #94a3b8;
+        }
+
+    </style>
+
+    <script>
+        function toggleBody(id) {
+            const element = document.getElementById("body-" + id);
+            element.style.display = element.style.display === "block" ? "none" : "block";
+        }
+    </script>
+</head>
+<body>
+
+<div class="wrapper">
+
+    <div class="header">
+        <h1>Sent Emails</h1>
+        <a class="back-link" href="/">← Back to MailNova</a>
+    </div>
+
+    <div class="card">
+
+        {% if emails|length == 0 %}
+            <div class="empty-state">
+                No emails sent yet.
+            </div>
+        {% else %}
+
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Receiver</th>
+                    <th>Subject</th>
+                    <th>Preview</th>
+                    <th>Time</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for email in emails %}
+                <tr>
+                    <td>{{ email[0] }}</td>
+
+                    <td class="receiver">
+                        {{ email[1] }}
+                    </td>
+
+                    <td class="subject">
+                        {{ email[2] }}
+                    </td>
+
+                    <td onclick="toggleBody({{ email[0] }})">
+                        <div class="body-preview">
+                            {{ email[3] }}
+                        </div>
+                        <div class="expandable" id="body-{{ email[0] }}">
+                            {{ email[3] }}
+                        </div>
+                    </td>
+
+                    <td class="timestamp">
+                        {{ email[4] }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+
+        </table>
+
+        {% endif %}
+
+    </div>
+
+</div>
+
+</body>
+</html>

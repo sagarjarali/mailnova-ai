@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MailNova - Intelligent Email Assistant</title>
+    <style>
+        body {
+            margin: 0;
+            background: #0f172a;
+            font-family: "Segoe UI", sans-serif;
+            color: #e2e8f0;
+            display: flex;
+            justify-content: center;
+            padding: 40px 20px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 720px;
+            background: #1e293b;
+            border-radius: 16px;
+            padding: 35px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 5px;
+            font-weight: 600;
+            letter-spacing: 1px;
+        }
+
+        .subtitle {
+            text-align: center;
+            font-size: 14px;
+            color: #94a3b8;
+            margin-bottom: 30px;
+        }
+
+        .section {
+            margin-bottom: 28px;
+        }
+
+        .section h3 {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #cbd5e1;
+        }
+
+        label {
+            font-size: 13px;
+            color: #94a3b8;
+        }
+
+        input, textarea, select {
+            width: 100%;
+            padding: 10px;
+            margin-top: 5px;
+            margin-bottom: 15px;
+            border-radius: 8px;
+            border: 1px solid #334155;
+            background: #0f172a;
+            color: white;
+            box-sizing: border-box;
+        }
+
+        textarea {
+            min-height: 110px;
+        }
+
+        button {
+            width: 100%;
+            padding: 11px;
+            border-radius: 8px;
+            border: none;
+            background: #2563eb;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            transition: 0.2s ease;
+        }
+
+        button:hover {
+            background: #1d4ed8;
+        }
+
+        .secondary-btn {
+            background: #334155;
+            margin-top: 8px;
+        }
+
+        .secondary-btn:hover {
+            background: #475569;
+        }
+
+        .preview-box {
+            background: #0f172a;
+            border-radius: 10px;
+            padding: 15px;
+            border: 1px solid #334155;
+        }
+
+        .preview-header {
+            font-size: 13px;
+            color: #94a3b8;
+            margin-bottom: 8px;
+        }
+
+        .status {
+            font-size: 13px;
+            margin-top: 10px;
+            color: #38bdf8;
+        }
+
+        .top-right {
+            text-align: right;
+            margin-bottom: 15px;
+        }
+
+        a {
+            color: #60a5fa;
+            text-decoration: none;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+
+    <div class="top-right">
+        <a href="/history">View History</a>
+    </div>
+
+    <h1>MailNova</h1>
+    <div class="subtitle">Intelligent AI Email Assistant</div>
+
+    <form id="emailForm">
+
+        <!-- EMAIL DETAILS -->
+        <div class="section">
+            <h3>Email Details</h3>
+
+            <label>Receiver Name</label>
+            <input type="text" name="receiver_name" required>
+
+            <label>Receiver Email</label>
+            <input type="email" name="receiver_email" required>
+
+            <label>Your Name</label>
+            <input type="text" name="sender_name" required>
+        </div>
+
+        <!-- AI CONFIG -->
+        <div class="section">
+            <h3>AI Configuration</h3>
+
+            <label>Email Type</label>
+            <select name="email_type" required>
+                <option value="Cold Outreach">Cold Outreach</option>
+                <option value="Follow-Up">Follow-Up</option>
+                <option value="Complaint">Complaint</option>
+                <option value="Internal Communication">Internal Communication</option>
+                <option value="Networking">Networking</option>
+            </select>
+
+            <label>Tone</label>
+            <select name="tone" required>
+                <option value="Formal">Formal</option>
+                <option value="Professional">Professional</option>
+                <option value="Friendly">Friendly</option>
+                <option value="Persuasive">Persuasive</option>
+                <option value="Humorous">Humorous</option>
+            </select>
+        </div>
+
+        <!-- PURPOSE -->
+        <div class="section">
+            <h3>Email Purpose</h3>
+            <textarea name="mail_body" placeholder="Describe the purpose of the email..." required></textarea>
+            <button type="button" onclick="generateEmail()">Generate Email</button>
+            <div class="status" id="status"></div>
+        </div>
+
+        <!-- PREVIEW -->
+        <div class="section">
+            <h3>Preview</h3>
+
+            <div class="preview-box">
+                <div class="preview-header">Subject</div>
+                <input type="text" id="subject" name="subject">
+
+                <div class="preview-header">Body</div>
+                <textarea id="body" name="body"></textarea>
+            </div>
+
+            <button type="button" class="secondary-btn" onclick="generateEmail()">Regenerate</button>
+
+            <input type="file" name="attachment">
+
+            <button type="button" onclick="sendEmail()">Confirm & Send</button>
+        </div>
+
+    </form>
+</div>
+
+<script>
+const form = document.getElementById("emailForm");
+const status = document.getElementById("status");
+
+// =============================
+// AUTO SAVE DRAFT
+// =============================
+function saveDraft() {
+    const formData = new FormData(form);
+    const draft = {};
+
+    formData.forEach((value, key) => {
+        draft[key] = value;
+    });
+
+    localStorage.setItem("mailnova_draft", JSON.stringify(draft));
+}
+
+function loadDraft() {
+    const saved = localStorage.getItem("mailnova_draft");
+    if (!saved) return;
+
+    const draft = JSON.parse(saved);
+
+    Object.keys(draft).forEach(key => {
+        const field = form.querySelector(`[name="${key}"]`);
+        if (field) {
+            field.value = draft[key];
+        }
+    });
+}
+
+// Save on every input change
+form.addEventListener("input", saveDraft);
+
+// Load when page opens
+window.addEventListener("load", loadDraft);
+
+// =============================
+// GENERATE EMAIL
+// =============================
+function generateEmail() {
+    status.innerText = "Generating email...";
+
+    const formData = new FormData(form);
+
+    fetch("/generate-email", {
+        method: "POST",
+        body: formData
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.error) {
+            status.innerText = data.error;
+        } else {
+            document.getElementById("subject").value = data.subject;
+            document.getElementById("body").value = data.body;
+
+            saveDraft();  // save generated content
+            status.innerText = "Draft generated successfully.";
+        }
+    })
+    .catch(() => {
+        status.innerText = "Generation failed.";
+    });
+}
+
+// =============================
+// SEND EMAIL
+// =============================
+function sendEmail() {
+    const formData = new FormData(form);
+
+    fetch("/confirm-send", {
+        method: "POST",
+        body: formData
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.error) {
+            alert(data.error);
+        } else {
+            alert("Email sent successfully!");
+
+            // Clear saved draft after successful send
+            localStorage.removeItem("mailnova_draft");
+
+            window.location.href = "/history";
+        }
+    });
+}
+</script>
