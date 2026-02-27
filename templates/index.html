@@ -127,7 +127,7 @@
 <body>
 
 <div class="container">
-
+    <div id="status" style="margin-top:10px; color:#93c5fd; font-size:14px;"></div>
     <div class="top-right">
         <a href="/history">View History</a>
     </div>
@@ -205,94 +205,112 @@
 </div>
 
 <script>
-const form = document.getElementById("emailForm");
-const status = document.getElementById("status");
+const DRAFT_KEY = "mailnova_draft_v1";
 
-// =============================
-// AUTO SAVE DRAFT
-// =============================
+function setStatus(msg) {
+  const el = document.getElementById("status");
+  if (el) el.textContent = msg || "";
+}
+
+// Save draft (WITHOUT file input)
 function saveDraft() {
-    const formData = new FormData(form);
-    const draft = {};
+  const form = document.getElementById("emailForm");
+  const data = {};
 
-    formData.forEach((value, key) => {
-        draft[key] = value;
-    });
+  [...form.elements].forEach(el => {
+    if (!el.name) return;
+    if (el.type === "file") return; // IMPORTANT: never save file input
+    data[el.name] = el.value;
+  });
 
-    localStorage.setItem("mailnova_draft", JSON.stringify(draft));
+  localStorage.setItem(DRAFT_KEY, JSON.stringify(data));
 }
 
+// Load draft (skip file input)
 function loadDraft() {
-    const saved = localStorage.getItem("mailnova_draft");
-    if (!saved) return;
+  const form = document.getElementById("emailForm");
+  const raw = localStorage.getItem(DRAFT_KEY);
+  if (!raw) return;
 
-    const draft = JSON.parse(saved);
+  let data = {};
+  try { data = JSON.parse(raw); } catch { return; }
 
-    Object.keys(draft).forEach(key => {
-        const field = form.querySelector(`[name="${key}"]`);
-        if (field) {
-            field.value = draft[key];
-        }
-    });
+  Object.entries(data).forEach(([name, value]) => {
+    const el = form.querySelector(`[name="${name}"]`);
+    if (!el) return;
+
+    if (el.type === "file") {
+      el.value = ""; // allowed: clear only
+      return;
+    }
+    el.value = value ?? "";
+  });
 }
 
-// Save on every input change
-form.addEventListener("input", saveDraft);
+// Auto-save while typing
+document.addEventListener("input", (e) => {
+  const form = document.getElementById("emailForm");
+  if (form && form.contains(e.target)) saveDraft();
+});
 
-// Load when page opens
-window.addEventListener("load", loadDraft);
+window.addEventListener("load", () => {
+  loadDraft();
+});
 
-// =============================
-// GENERATE EMAIL
-// =============================
-function generateEmail() {
-    status.innerText = "Generating email...";
+// Generate email
+async function generateEmail() {
+  setStatus("Generating...");
+  const form = document.getElementById("emailForm");
+  const formData = new FormData(form);
 
-    const formData = new FormData(form);
+  try {
+    const res = await fetch("/generate-email", { method: "POST", body: formData });
+    const data = await res.json();
 
-    fetch("/generate-email", {
-        method: "POST",
-        body: formData
-    })
-    .then(res => res.json())
-    .then(data => {
-        if (data.error) {
-            status.innerText = data.error;
-        } else {
-            document.getElementById("subject").value = data.subject;
-            document.getElementById("body").value = data.body;
+    if (!res.ok) throw new Error(data.error || "Generation failed.");
 
-            saveDraft();  // save generated content
-            status.innerText = "Draft generated successfully.";
-        }
-    })
-    .catch(() => {
-        status.innerText = "Generation failed.";
-    });
+    document.getElementById("subject").value = data.subject || "";
+    document.getElementById("body").value = data.body || "";
+
+    saveDraft();
+    setStatus("Generated ✅");
+  } catch (err) {
+    setStatus("");
+    alert(err.message);
+  }
 }
 
-// =============================
-// SEND EMAIL
-// =============================
-function sendEmail() {
-    const formData = new FormData(form);
+// Send email (robust JSON + error handling)
+async function sendEmail() {
+  setStatus("Sending...");
+  const form = document.getElementById("emailForm");
+  const formData = new FormData(form);
 
-    fetch("/confirm-send", {
-        method: "POST",
-        body: formData
-    })
-    .then(res => res.json())
-    .then(data => {
-        if (data.error) {
-            alert(data.error);
-        } else {
-            alert("Email sent successfully!");
+  try {
+    const res = await fetch("/confirm-send", { method: "POST", body: formData });
 
-            // Clear saved draft after successful send
-            localStorage.removeItem("mailnova_draft");
+    // If server returns HTML error page, don't try res.json()
+    const ct = res.headers.get("content-type") || "";
+    let data;
 
-            window.location.href = "/history";
-        }
-    });
+    if (ct.includes("application/json")) {
+      data = await res.json();
+    } else {
+      const text = await res.text();
+      throw new Error(`Server returned ${res.status} (non-JSON). Check Render logs. Snippet: ${text.slice(0, 120)}...`);
+    }
+
+    if (!res.ok) throw new Error(data.error || "Send failed.");
+
+    // Clear draft on successful send
+    localStorage.removeItem(DRAFT_KEY);
+
+    setStatus("Sent ✅");
+    alert(data.message || "Email sent!");
+    window.location.href = "/history";
+  } catch (err) {
+    setStatus("");
+    alert(err.message);
+  }
 }
 </script>

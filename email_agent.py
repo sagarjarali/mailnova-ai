@@ -181,29 +181,27 @@ Purpose: {mail_body}
 @app.route("/confirm-send", methods=["POST"])
 def confirm_send():
     try:
-        receiver_email = request.form.get("receiver_email")
-        subject = request.form.get("subject")
-        body = request.form.get("body")
-        tone = request.form.get("tone")
-        email_type = request.form.get("email_type")
+        receiver_email = request.form.get("receiver_email", "").strip()
+        subject = request.form.get("subject", "").strip()
+        body = request.form.get("body", "").strip()
         attachment = request.files.get("attachment")
 
         if not receiver_email or not subject or not body:
-            return jsonify({"error": "Missing required fields"}), 400
+            return jsonify({"error": "Missing required fields (receiver_email/subject/body)."}), 400
 
-        if not is_valid_email(receiver_email):
-            return jsonify({"error": "Invalid email format"}), 400
+        # Extra safety checks for env vars (common Render issue)
+        if not GMAIL_USER or not GMAIL_APP_PASSWORD:
+            return jsonify({"error": "Server email credentials are not configured (GMAIL_USER / GMAIL_APP_PASSWORD)."}), 500
 
         send_email(receiver_email, subject, body, attachment)
+        return jsonify({"message": "Email sent successfully!"}), 200
 
-        log_email(receiver_email, email_type, tone, subject, body)
-
-        return jsonify({"message": "Email sent successfully!"})
+    except smtplib.SMTPAuthenticationError:
+        return jsonify({"error": "SMTP authentication failed. Check GMAIL_USER and GMAIL_APP_PASSWORD (App Password must match this Gmail)."}), 500
 
     except Exception as e:
-        return jsonify({"error": f"Sending failed: {str(e)}"}), 500
-
-
+        # Always return JSON (prevents Unexpected token '<' on frontend)
+        return jsonify({"error": f"Server error while sending: {str(e)}"}), 500
 @app.route("/history")
 def history():
     conn = sqlite3.connect(DB_NAME)
