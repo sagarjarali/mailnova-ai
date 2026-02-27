@@ -76,8 +76,10 @@ def send_email_via_sendgrid(to_email: str, subject: str, body: str, attachment=N
         "personalizations": [{"to": [{"email": to_email}]}],
         "from": {"email": MAIL_FROM},
         "subject": subject,
-        "content": [{"type": "text/plain", "value": body}],
-    }
+        "content": [
+    {"type": "text/plain", "value": body},
+    {"type": "text/html", "value": body.replace("\n", "<br>")}
+],
 
     # Attachment (optional)
     if attachment and getattr(attachment, "filename", ""):
