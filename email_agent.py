@@ -13,15 +13,20 @@ load_dotenv()
 
 app = Flask(__name__)
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 DB_NAME = "email_history.db"
 
+# Gemini client (for generation)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
+
+# ==============================
+# DATABASE
+# ==============================
 def init_db():
     conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("""
+    cur = conn.cursor()
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS emails (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             receiver_email TEXT,
@@ -37,11 +42,25 @@ def init_db():
 init_db()
 
 
+# ==============================
+# HELPERS
+# ==============================
 def parse_json_response(text: str):
     cleaned = (text or "").strip()
     if cleaned.startswith("```"):
         cleaned = cleaned.replace("```json", "").replace("```", "").strip()
     return json.loads(cleaned)
+
+
+def save_to_db(to_email: str, subject: str, body: str):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO emails (receiver_email, subject, body, sent_time)
+        VALUES (?, ?, ?, ?)
+    """, (to_email, subject, body, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    conn.commit()
+    conn.close()
 
 
 def send_email_via_sendgrid(to_email: str, subject: str, body: str, attachment=None):
@@ -60,6 +79,7 @@ def send_email_via_sendgrid(to_email: str, subject: str, body: str, attachment=N
         "content": [{"type": "text/plain", "value": body}],
     }
 
+    # Attachment (optional)
     if attachment and getattr(attachment, "filename", ""):
         attachment.seek(0)
         file_bytes = attachment.read()
@@ -67,14 +87,14 @@ def send_email_via_sendgrid(to_email: str, subject: str, body: str, attachment=N
             "content": base64.b64encode(file_bytes).decode("utf-8"),
             "type": "application/octet-stream",
             "filename": attachment.filename,
-            "disposition": "attachment",
+            "disposition": "attachment"
         }]
 
     res = requests.post(
         "https://api.sendgrid.com/v3/mail/send",
         headers={"Authorization": f"Bearer {SENDGRID_API_KEY}"},
         json=payload,
-        timeout=30,
+        timeout=30
     )
 
     if res.status_code != 202:
@@ -84,23 +104,29 @@ def send_email_via_sendgrid(to_email: str, subject: str, body: str, attachment=N
             detail = res.text
         raise RuntimeError(f"SendGrid failed ({res.status_code}): {detail}")
 
-    # Save to DB
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO emails (receiver_email, subject, body, sent_time)
-        VALUES (?, ?, ?, ?)
-    """, (to_email, subject, body, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-    conn.commit()
-    conn.close()
+    save_to_db(to_email, subject, body)
 
 
-@app.route("/")
+# ==============================
+# ROUTES
+# ==============================
+@app.get("/health")
+def health():
+    # Quick sanity checks (no secrets leaked)
+    return jsonify({
+        "ok": True,
+        "has_gemini_key": bool(os.getenv("GEMINI_API_KEY")),
+        "has_sendgrid_key": bool(os.getenv("SENDGRID_API_KEY")),
+        "has_mail_from": bool(os.getenv("MAIL_FROM")),
+    }), 200
+
+
+@app.get("/")
 def home():
     return render_template("index.html")
 
 
-@app.route("/generate-email", methods=["POST"])
+@app.post("/generate-email")
 def generate_email():
     try:
         if not client:
@@ -110,6 +136,10 @@ def generate_email():
         sender_name = request.form.get("sender_name", "").strip()
         mail_body = request.form.get("mail_body", "").strip()
         tone = request.form.get("tone", "").strip()
+        email_type = request.form.get("email_type", "").strip()
+
+        if not receiver_name or not sender_name or not mail_body or not tone:
+            return jsonify({"error": "Missing required fields for generation."}), 400
 
         tomorrow = datetime.now() + timedelta(days=1)
         formatted_date = tomorrow.strftime("%d %B %Y")
@@ -117,10 +147,11 @@ def generate_email():
         prompt = f"""
 Write a professional email.
 
+Email Type: {email_type}
 Tone: {tone}
 Replace any word like tomorrow with {formatted_date}.
 No placeholders.
-Return strictly valid JSON.
+Return strictly valid JSON only.
 
 {{
   "subject": "email subject",
@@ -138,13 +169,16 @@ Purpose: {mail_body}
         )
 
         email_content = parse_json_response(response.text)
+        if "subject" not in email_content or "body" not in email_content:
+            return jsonify({"error": "Model returned invalid JSON shape."}), 500
+
         return jsonify(email_content), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/confirm-send", methods=["POST"])
+@app.post("/confirm-send")
 def confirm_send():
     try:
         receiver_email = request.form.get("receiver_email", "").strip()
@@ -159,15 +193,16 @@ def confirm_send():
         return jsonify({"message": "Email sent successfully!"}), 200
 
     except Exception as e:
+        # Always JSON error
         return jsonify({"error": f"Send failed: {str(e)}"}), 500
 
 
-@app.route("/history")
+@app.get("/history")
 def history():
     conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM emails ORDER BY id DESC")
-    emails = cursor.fetchall()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM emails ORDER BY id DESC")
+    emails = cur.fetchall()
     conn.close()
     return render_template("history.html", emails=emails)
 
