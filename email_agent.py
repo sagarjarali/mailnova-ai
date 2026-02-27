@@ -73,14 +73,44 @@ def send_email_via_sendgrid(to_email: str, subject: str, body: str, attachment=N
         raise RuntimeError("MAIL_FROM is missing (must be a verified sender in SendGrid).")
 
     payload = {
-        "personalizations": [{"to": [{"email": to_email}]}],
+        "personalizations": [
+            {"to": [{"email": to_email}]}
+        ],
         "from": {"email": MAIL_FROM},
         "subject": subject,
         "content": [
-    {"type": "text/plain", "value": body},
-    {"type": "text/html", "value": body.replace("\n", "<br>")}
-],
+            {"type": "text/plain", "value": body},
+            {"type": "text/html", "value": body.replace("\n", "<br>")}
+        ]
+    }
 
+    if attachment and getattr(attachment, "filename", ""):
+        attachment.seek(0)
+        file_bytes = attachment.read()
+        payload["attachments"] = [{
+            "content": base64.b64encode(file_bytes).decode("utf-8"),
+            "type": "application/octet-stream",
+            "filename": attachment.filename,
+            "disposition": "attachment"
+        }]
+
+    response = requests.post(
+        "https://api.sendgrid.com/v3/mail/send",
+        headers={
+            "Authorization": f"Bearer {SENDGRID_API_KEY}"
+        },
+        json=payload,
+        timeout=30
+    )
+
+    if response.status_code != 202:
+        try:
+            detail = response.json()
+        except Exception:
+            detail = response.text
+        raise RuntimeError(f"SendGrid failed ({response.status_code}): {detail}")
+
+    save_to_db(to_email, subject, body)
     # Attachment (optional)
     if attachment and getattr(attachment, "filename", ""):
         attachment.seek(0)
