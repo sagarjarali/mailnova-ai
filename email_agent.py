@@ -238,6 +238,9 @@ def history():
     conn.close()
     return render_template("history.html", emails=emails)
 
+@app.get("/ping")
+def ping():
+    return "ok", 200
 
 if __name__ == "__main__":
     app.run(debug=True)
