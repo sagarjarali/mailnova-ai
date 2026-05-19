@@ -1,31 +1,45 @@
 import os
-import json
 import sqlite3
-import base64
+import smtplib
 from datetime import datetime, timedelta
 
-import requests
 from flask import Flask, render_template, request, jsonify
 from dotenv import load_dotenv
-from google import genai
 
+from groq import Groq
+
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+
+# ==============================
+# LOAD ENV
+# ==============================
 load_dotenv()
 
 app = Flask(__name__)
 
 DB_NAME = "email_history.db"
 
-# Gemini client (for generation)
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+# ==============================
+# GROQ CLIENT
+# ==============================
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
+client = Groq(
+    api_key=GROQ_API_KEY
+)
 
 # ==============================
-# DATABASE
+# DATABASE INIT
 # ==============================
 def init_db():
+
     conn = sqlite3.connect(DB_NAME)
+
     cur = conn.cursor()
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS emails (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,212 +49,283 @@ def init_db():
             sent_time TEXT
         )
     """)
+
     conn.commit()
     conn.close()
 
 
 init_db()
 
-
 # ==============================
-# HELPERS
+# SAVE HISTORY
 # ==============================
-def parse_json_response(text: str):
-    cleaned = (text or "").strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.replace("```json", "").replace("```", "").strip()
-    return json.loads(cleaned)
+def save_to_db(to_email, subject, body):
 
-
-def save_to_db(to_email: str, subject: str, body: str):
     conn = sqlite3.connect(DB_NAME)
+
     cur = conn.cursor()
+
     cur.execute("""
-        INSERT INTO emails (receiver_email, subject, body, sent_time)
+        INSERT INTO emails
+        (receiver_email, subject, body, sent_time)
         VALUES (?, ?, ?, ?)
-    """, (to_email, subject, body, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    """, (
+        to_email,
+        subject,
+        body,
+        datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+    ))
+
     conn.commit()
     conn.close()
 
+# ==============================
+# SEND EMAIL
+# ==============================
+def send_email(receiver_email, subject, body, attachment=None):
 
-def send_email_via_sendgrid(to_email: str, subject: str, body: str, attachment=None):
-    SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
-    MAIL_FROM = os.getenv("MAIL_FROM")
+    gmail_user = os.getenv("GMAIL_USER")
+    gmail_password = os.getenv("GMAIL_APP_PASSWORD")
 
-    if not SENDGRID_API_KEY:
-        raise RuntimeError("SENDGRID_API_KEY is missing in Render Environment Variables.")
-    if not MAIL_FROM:
-        raise RuntimeError("MAIL_FROM is missing (must be a verified sender in SendGrid).")
+    print("===================================")
+    print("EMAIL:", repr(gmail_user))
+    print("RECEIVER:", repr(receiver_email))
+    print("===================================")
 
-    payload = {
-        "personalizations": [
-            {"to": [{"email": to_email}]}
-        ],
-        "from": {"email": MAIL_FROM},
-        "subject": subject,
-        "content": [
-            {"type": "text/plain", "value": body},
-            {"type": "text/html", "value": body.replace("\n", "<br>")}
-        ]
-    }
+    msg = MIMEMultipart()
 
-    if attachment and getattr(attachment, "filename", ""):
+    msg["From"] = gmail_user
+    msg["To"] = receiver_email
+    msg["Subject"] = subject
+
+    msg.attach(MIMEText(body, "plain"))
+
+    # ==============================
+    # ATTACHMENT
+    # ==============================
+    if attachment and attachment.filename != "":
+
         attachment.seek(0)
-        file_bytes = attachment.read()
-        payload["attachments"] = [{
-            "content": base64.b64encode(file_bytes).decode("utf-8"),
-            "type": "application/octet-stream",
-            "filename": attachment.filename,
-            "disposition": "attachment"
-        }]
 
-    response = requests.post(
-        "https://api.sendgrid.com/v3/mail/send",
-        headers={
-            "Authorization": f"Bearer {SENDGRID_API_KEY}"
-        },
-        json=payload,
-        timeout=30
+        part = MIMEBase("application", "octet-stream")
+
+        part.set_payload(attachment.read())
+
+        encoders.encode_base64(part)
+
+        part.add_header(
+            "Content-Disposition",
+            f"attachment; filename={attachment.filename}"
+        )
+
+        msg.attach(part)
+
+    # ==============================
+    # SMTP
+    # ==============================
+    server = smtplib.SMTP("smtp.gmail.com", 587)
+
+    server.starttls()
+
+    server.login(gmail_user, gmail_password)
+
+    # FIXED SEND METHOD
+    server.sendmail(
+        gmail_user,
+        receiver_email,
+        msg.as_string()
     )
 
-    if response.status_code != 202:
-        try:
-            detail = response.json()
-        except Exception:
-            detail = response.text
-        raise RuntimeError(f"SendGrid failed ({response.status_code}): {detail}")
-
-    save_to_db(to_email, subject, body)
-    # Attachment (optional)
-    if attachment and getattr(attachment, "filename", ""):
-        attachment.seek(0)
-        file_bytes = attachment.read()
-        payload["attachments"] = [{
-            "content": base64.b64encode(file_bytes).decode("utf-8"),
-            "type": "application/octet-stream",
-            "filename": attachment.filename,
-            "disposition": "attachment"
-        }]
-
-    res = requests.post(
-        "https://api.sendgrid.com/v3/mail/send",
-        headers={"Authorization": f"Bearer {SENDGRID_API_KEY}"},
-        json=payload,
-        timeout=30
-    )
-
-    if res.status_code != 202:
-        try:
-            detail = res.json()
-        except Exception:
-            detail = res.text
-        raise RuntimeError(f"SendGrid failed ({res.status_code}): {detail}")
-
-    save_to_db(to_email, subject, body)
-
+    server.quit()
 
 # ==============================
-# ROUTES
+# HOME
 # ==============================
-@app.get("/health")
-def health():
-    # Quick sanity checks (no secrets leaked)
-    return jsonify({
-        "ok": True,
-        "has_gemini_key": bool(os.getenv("GEMINI_API_KEY")),
-        "has_sendgrid_key": bool(os.getenv("SENDGRID_API_KEY")),
-        "has_mail_from": bool(os.getenv("MAIL_FROM")),
-    }), 200
-
-
-@app.get("/")
+@app.route("/")
 def home():
     return render_template("index.html")
 
+# ==============================
+# OPTIONAL PING ROUTE
+# ==============================
+@app.route("/ping")
+def ping():
+    return "Server Active"
 
-@app.post("/generate-email")
+# ==============================
+# GENERATE EMAIL
+# ==============================
+@app.route("/generate-email", methods=["POST"])
 def generate_email():
+
     try:
-        if not client:
-            return jsonify({"error": "GEMINI_API_KEY not set on server."}), 500
 
-        receiver_name = request.form.get("receiver_name", "").strip()
-        sender_name = request.form.get("sender_name", "").strip()
-        mail_body = request.form.get("mail_body", "").strip()
-        tone = request.form.get("tone", "").strip()
-        email_type = request.form.get("email_type", "").strip()
+        receiver_name = request.form.get("receiver_name")
 
-        if not receiver_name or not sender_name or not mail_body or not tone:
-            return jsonify({"error": "Missing required fields for generation."}), 400
+        sender_name = request.form.get("sender_name")
+
+        mail_body = request.form.get("mail_body")
+
+        tone = request.form.get("tone")
+
+        email_type = request.form.get("email_type")
 
         tomorrow = datetime.now() + timedelta(days=1)
+
         formatted_date = tomorrow.strftime("%d %B %Y")
 
         prompt = f"""
-Write a professional email.
+Write a professional ready-to-send email.
 
-Email Type: {email_type}
+Rules:
+- No placeholders
+- No markdown
+- Replace words like tomorrow with exact date: {formatted_date}
+- Proper formatting
+- Professional structure
+
 Tone: {tone}
-Replace any word like tomorrow with {formatted_date}.
-No placeholders.
-Return strictly valid JSON only.
+Email Type: {email_type}
 
-{{
-  "subject": "email subject",
-  "body": "email body"
-}}
+Sender Name: {sender_name}
+Receiver Name: {receiver_name}
 
-Sender: {sender_name}
-Receiver: {receiver_name}
-Purpose: {mail_body}
+Purpose:
+{mail_body}
+
+Return response in this exact format:
+
+SUBJECT: your subject here
+
+BODY:
+your email body here
 """
 
-        response = client.models.generate_content(
-            model="gemini-2.5-flash-lite",
-            contents=prompt,
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0.7
         )
 
-        email_content = parse_json_response(response.text)
-        if "subject" not in email_content or "body" not in email_content:
-            return jsonify({"error": "Model returned invalid JSON shape."}), 500
+        response_text = completion.choices[0].message.content
 
-        return jsonify(email_content), 200
+        # CLEAN RESPONSE
+        response_text = response_text.replace("```", "").strip()
+
+        print("AI RESPONSE:")
+        print(response_text)
+
+        # ==============================
+        # PARSE SUBJECT & BODY
+        # ==============================
+        subject = ""
+        body = ""
+
+        if "SUBJECT:" in response_text and "BODY:" in response_text:
+
+            parts = response_text.split("BODY:")
+
+            subject_part = parts[0]
+            body_part = parts[1]
+
+            subject = subject_part.replace("SUBJECT:", "").strip()
+
+            body = body_part.strip()
+
+        else:
+            return jsonify({
+                "error": "AI response format invalid"
+            }), 500
+
+        return jsonify({
+            "subject": subject,
+            "body": body
+        })
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
+        import traceback
+        traceback.print_exc()
 
-@app.post("/confirm-send")
+        return jsonify({
+            "error": str(e)
+        }), 500
+
+# ==============================
+# CONFIRM & SEND
+# ==============================
+@app.route("/confirm-send", methods=["POST"])
 def confirm_send():
+
     try:
-        receiver_email = request.form.get("receiver_email", "").strip()
-        subject = request.form.get("subject", "").strip()
-        body = request.form.get("body", "").strip()
+
+        receiver_email = request.form.get("receiver_email")
+
+        subject = request.form.get("subject")
+
+        body = request.form.get("body")
+
         attachment = request.files.get("attachment")
 
-        if not receiver_email or not subject or not body:
-            return jsonify({"error": "Missing required fields (receiver_email/subject/body)."}), 400
+        print("RECEIVER =", receiver_email)
 
-        send_email_via_sendgrid(receiver_email, subject, body, attachment)
-        return jsonify({"message": "Email sent successfully!"}), 200
+        send_email(
+            receiver_email,
+            subject,
+            body,
+            attachment
+        )
+
+        save_to_db(
+            receiver_email,
+            subject,
+            body
+        )
+
+        return jsonify({
+            "message": "Email sent successfully"
+        })
 
     except Exception as e:
-        # Always JSON error
-        return jsonify({"error": f"Send failed: {str(e)}"}), 500
 
+        import traceback
+        traceback.print_exc()
 
-@app.get("/history")
+        return jsonify({
+            "error": str(e)
+        }), 500
+
+# ==============================
+# HISTORY
+# ==============================
+@app.route("/history")
 def history():
+
     conn = sqlite3.connect(DB_NAME)
+
     cur = conn.cursor()
-    cur.execute("SELECT * FROM emails ORDER BY id DESC")
+
+    cur.execute("""
+        SELECT * FROM emails
+        ORDER BY id DESC
+    """)
+
     emails = cur.fetchall()
+
     conn.close()
-    return render_template("history.html", emails=emails)
 
-@app.get("/ping")
-def ping():
-    return "ok", 200
+    return render_template(
+        "history.html",
+        emails=emails
+    )
 
+# ==============================
+# RUN
+# ==============================
 if __name__ == "__main__":
     app.run(debug=True)
